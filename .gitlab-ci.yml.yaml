@@ -1,0 +1,32 @@
+stages:
+  - setup
+  - test
+  - train
+
+variables:
+  PYTHON_VERSION: "3.10"
+
+install_dependencies:
+  stage: setup
+  image: python:$PYTHON_VERSION
+  script:
+    - pip install -r requirements.txt
+  artifacts:
+    paths:
+      - .cache/pip
+
+run_tests:
+  stage: test
+  image: python:$PYTHON_VERSION
+  script:
+    - pip install -r requirements.txt
+    - pytest tests/
+
+train_models:
+  stage: train
+  image: python:$PYTHON_VERSION
+  script:
+    - pip install -r requirements.txt
+    - python src/training.py
+  only:
+    - main
