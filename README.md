@@ -1,1 +1,1 @@
-# fx-macro-forecasting
+# ai-ml-fx-price-forecasting
