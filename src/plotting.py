@@ -7,4 +7,8 @@ def plot_training_results(dates, actual, predicted, title="Model Predictions"):
     plt.title(title)
     plt.legend()
     plt.grid(True)
+<<<<<<< HEAD
     plt.savefig(f"{title.replace(' ', '_')}.png")
+=======
+    plt.savefig(f"{title.replace(' ', '_')}.png")
+>>>>>>> e36f0b3fa24d9c2a1b7bf43a947a8da888a78209

@@ -4,6 +4,7 @@ import numpy as np
 import lightgbm as lgb
 import yfinance as yf
 import scipy.stats as si
+import time
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 import matplotlib.pyplot as plt
@@ -48,7 +49,7 @@ if data_source == "External (Yahoo Finance API)":
             df_out['Oil_Z'] = np.random.randn(len(df_out))
             df_out['VIX_Z'] = np.random.randn(len(df_out))
             df_out['Yield_Z'] = np.random.randn(len(df_out))
-            df_out['Target_Vol'] = np.abs(np.random.randn(len(df_out)) * 0.02 + 0.05)
+            df_out['Target_Volatility'] = np.abs(np.random.randn(len(df_out)) * 0.02 + 0.05)
 
             st.session_state['processed_df'] = df_out
             st.session_state['model_target'] = currency_pair
@@ -71,7 +72,7 @@ elif data_source == "Internal Sandbox Data":
             'VIX_Z': np.random.randn(1000),
             'Yield_Z': np.random.randn(1000),
             'Target_Price': np.cumsum(np.random.randn(1000) * 0.01) + 1.20,
-            'Target_Vol': np.abs(np.random.randn(1000) * 0.02 + 0.05)
+            'Target_Volatility': np.abs(np.random.randn(1000) * 0.02 + 0.05)
         }, index=dates)
         st.session_state['model_target'] = "Internal_Baseline_Simulation"
         st.sidebar.success("Synthetic Array Mounted.")
@@ -149,6 +150,48 @@ def pricing_binomial_tree(S, K, T, r_d, r_f, sigma, option_type="Call Option", s
             option_values[i] = np.exp(-r_d * dt) * (p * option_values[i] + (1 - p) * option_values[i + 1])
     return option_values[0]
 
+def stream_fx_binomial_tree(S, K, T, r_d, r_f, sigma, option_type="Call Option", steps=5):
+    """
+    Generates and streams a CRR Binomial Tree for an FX Option.
+    Yields the calculation state step-by-step for UI streaming.
+    """
+    dt = T / steps
+    u = np.exp(sigma * np.sqrt(dt))
+    d = 1 / u
+    p = (np.exp((r_d - r_f) * dt) - d) / (u - d)
+    discount = np.exp(-r_d * dt)
+
+    yield f"--- Initializing CRR Tree Parameters ---"
+    yield f"Up factor (u): {u:.4f} | Down factor (d): {d:.4f}"
+    yield f"Risk-neutral probability (p): {p:.4f}\n"
+
+    spot_tree = [np.array([S])]
+    
+    yield "--- Forward Pass: Building Spot Price Nodes ---"
+    for i in range(1, steps + 1):
+        prices = S * (u ** np.arange(i, -1, -1)) * (d ** np.arange(0, i + 1, 1))
+        spot_tree.append(prices)
+        yield f"Step {i}: {np.round(prices, 4)}"
+        time.sleep(0.3) # Simulates computation delay for the UI
+
+    yield "\n--- Backward Pass: Calculating Option Value ---"
+    
+    terminal_spots = spot_tree[-1]
+    if option_type == "Call Option":
+        option_values = np.maximum(0, terminal_spots - K)
+    else:
+        option_values = np.maximum(0, K - terminal_spots)
+        
+    yield f"Maturity Payoffs: {np.round(option_values, 4)}"
+    time.sleep(0.3)
+
+    for i in range(steps - 1, -1, -1):
+        option_values = discount * (p * option_values[:-1] + (1 - p) * option_values[1:])
+        yield f"Step {i} Option Values: {np.round(option_values, 4)}"
+        time.sleep(0.3)
+
+    yield f"\n>>> Final {option_type} Price: {option_values[0]:.5f} <<<"
+
 # ==============================================================================
 # 4. MAIN INTERFACE FRAMEWORK
 # ==============================================================================
@@ -163,7 +206,7 @@ if st.session_state['processed_df'] is None:
         'VIX_Z': np.random.randn(1000),
         'Yield_Z': np.random.randn(1000),
         'Target_Price': np.cumsum(np.random.randn(1000) * 0.01) + 1.20,
-        'Target_Vol': np.abs(np.random.randn(1000) * 0.02 + 0.05)
+        'Target_Volatility': np.abs(np.random.randn(1000) * 0.02 + 0.05)
     }, index=dates)
     st.session_state['model_target'] = "Internal_Baseline_Default"
 
@@ -185,7 +228,7 @@ with tabs[0]:
         st.line_chart(df[['Target_Price']])
     with col_d2:
         st.metric("Total Matrix Records", len(df))
-        st.metric("Base Volatility Mode", f"{df['Target_Vol'].iloc[-1]:.4f}")
+        st.metric("Base Volatility Mode", f"{df['Target_Volatility'].iloc[-1]:.4f}")
     st.dataframe(df.tail(10))
 
 # ------------------------------------------------------------------------------
@@ -201,7 +244,7 @@ with tabs[1]:
     features = ['Oil_Z', 'VIX_Z', 'Yield_Z']
     X = df[features]
     y_price = df['Target_Price']
-    y_vol = df['Target_Vol']
+    y_vol = df['Target_Volatility']
 
     split_idx = int(len(df) * 0.8)
     X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
@@ -247,7 +290,7 @@ with tabs[1]:
         st.caption(
             "These figures are computed across the entire 20% test set the models "
             "never saw in training — not from the single scenario above. This is the "
-            "honest measure of how good the models actually are."
+            " measure of how good the models actually are."
         )
 
         # ---- 1. LightGBM: predict across the WHOLE test set, not one point ----
@@ -314,25 +357,51 @@ with tabs[1]:
                 f"that matter most for stress testing."
             )
 
-        # Plot Out-Of-Sample Validation Framework
-        fig, ax = plt.subplots(figsize=(12, 3.2))
-        history_series = y_test_p.values[-60:]
-        time_axis = np.arange(len(history_series))
+        # ======================================================================
+        #  PLOT OUT-OF-SAMPLE BEHAVIOR (CONTINUOUS LINE CHART)
+        # ======================================================================
+        fig, ax = plt.subplots(figsize=(12, 4))
+        
+        # Take the last 60 days of the test set for clear visualization
+        plot_window = min(60, len(y_test_p))
+        history_series = y_test_p.values[-plot_window:]
+        
+        # Align the rolling predictions we calculated earlier for the same window
+        lgb_series = lgb_test_preds[-plot_window:]
+        dl_series = dl_preds[-plot_window:]
+        
+        time_axis = np.arange(plot_window)
 
-        scalar_lgb = float(np.ravel(pred_lgb)[0])
-        scalar_dl = float(np.ravel(pred_dl)[0])
-        target_idx = int(time_axis[-1])
+        # Plot Actuals (Thick White Line)
+        ax.plot(time_axis, history_series, color="#9D9D0D", linewidth=2.5, alpha=0.9, label="Actual Rate (Ground Truth)")
+        
+        # Plot LightGBM (Crimson Dashed Line - Shows Jumpy/Macro Behavior)
+        ax.plot(time_axis, lgb_series, color="#ff4b4b", linewidth=1.5, alpha=0.8, linestyle="--", label="LightGBM Projection")
+        
+        # Plot Deep Learning (Blue Dotted Line - Shows Smooth/Momentum Behavior)
+        ax.plot(time_axis, dl_series, color="#00a4ff", linewidth=1.5, alpha=0.8, linestyle="-.", label=f"{chosen_dl_model} Projection")
 
-        ax.plot(time_axis, history_series, color="black", alpha=0.8, label="Actual Out-of-Sample Rates")
-        ax.scatter(target_idx, scalar_lgb, color="crimson", s=180, zorder=5, label="Simulated LightGBM Node", edgecolors='white')
-        ax.scatter(target_idx, scalar_dl, color="dodgerblue", s=180, zorder=5, label=f"Simulated {chosen_dl_model} Node", edgecolors='white')
-        ax.axvline(x=target_idx, color='gray', linestyle='--', alpha=0.5)
-        ax.legend(loc="upper left")
-        ax.grid(True, linestyle="--", alpha=0.4)
+        ax.set_title("Cross-Model Behavioral Divergence (Last 60 Test Days)", color="white", pad=15)
+        
+        # Apply transparent dark-theme styling to match Streamlit perfectly
+        fig.patch.set_facecolor('none')
+        ax.set_facecolor('none')
+        ax.tick_params(colors='lightgray')
+        for spine in ax.spines.values():
+            spine.set_edgecolor('#333333')
+            
+        legend = ax.legend(loc="lower left", facecolor='#0e1117', edgecolor='#333333')
+        for text in legend.get_texts():
+            text.set_color("lightgray")
+            
+        ax.grid(True, linestyle="--", alpha=0.2, color='gray')
         st.pyplot(fig)
 
         # --- DYNAMIC TEXT INTERPRETATION EXPANDER ---
         st.markdown("### 📋 Executive Analytics Summary & Scenario Breakdown")
+        
+        scalar_lgb = float(np.ravel(pred_lgb)[0])
+        scalar_dl = float(np.ravel(pred_dl)[0])
         variance_delta = abs(scalar_lgb - scalar_dl)
 
         with st.expander("🔍 Click to view Deep Learning vs. Machine Learning Structural Interpretation", expanded=True):
@@ -370,7 +439,7 @@ with tabs[2]:
     """)
 
     current_market_spot = float(df['Target_Price'].iloc[-1])
-    current_market_vol = float(df['Target_Vol'].iloc[-1])
+    current_market_vol = float(df['Target_Volatility'].iloc[-1])
 
     st.markdown("### 1. Configure Model Valuation Coefficients")
     o_col1, o_col2, o_col3 = st.columns(3)
@@ -404,23 +473,36 @@ with tabs[2]:
         * **Hedge Mechanics:** If you are protecting a position, this derivative ensures that no matter how severely market macro-shocks cause the underlying spot rate to crash, your structural floor remains locked at your strike price. Your downside risk is perfectly capped, while your upside profit potential remains completely open.
         """)
 
-        # ==============================================================================
-        #  OPTIONS SENSITIVITY PROFILE PLOT
-        # ==============================================================================
-        st.markdown("### 3. Option Premium Implied Volatility Sensitivity Curve")
-        volatility_space = np.linspace(0.02, 0.45, 25)
+    st.markdown("### 🔍 Live Binomial Tree Calculation Stream")
+    st.markdown("Watch the Cox-Ross-Rubinstein lattice build forward and discount backward in real-time.")
+    
+    stream_steps = st.slider("Tree Steps for Visualizer", min_value=3, max_value=10, value=5)
+    
+    if st.button("▶️ Run Live CRR Tree Simulation"):
+        stream_container = st.empty()
+        stream_text = ""
+        with st.spinner("Initializing Lattice Network..."):
+            for output in stream_fx_binomial_tree(S, K, T, r_d, r_f, sigma, option_direction, stream_steps):
+                stream_text += output + "\n"
+                stream_container.code(stream_text, language='text')
 
-        # Stream options prices across range
-        curve_prices_gk = [pricing_garman_kohlhagen(S, K, T, r_d, r_f, v, option_direction) for v in volatility_space]
-        curve_prices_tree = [pricing_binomial_tree(S, K, T, r_d, r_f, v, option_direction, steps=30) for v in volatility_space]
+    # ==============================================================================
+    #  OPTIONS SENSITIVITY PROFILE PLOT
+    # ==============================================================================
+    st.markdown("### 3. Option Premium Implied Volatility Sensitivity Curve")
+    volatility_space = np.linspace(0.02, 0.45, 25)
 
-        # Column headers (removed hyphens/symbols for cleaner Streamlit charting)
-        sensitivity_df = pd.DataFrame({
-            "Volatility": volatility_space,
-            "Garman Kohlhagen Model": curve_prices_gk,
-            "Binomial Tree Model": curve_prices_tree
-        })
+    # Stream options prices across range
+    curve_prices_gk = [pricing_garman_kohlhagen(S, K, T, r_d, r_f, v, option_direction) for v in volatility_space]
+    curve_prices_tree = [pricing_binomial_tree(S, K, T, r_d, r_f, v, option_direction, steps=30) for v in volatility_space]
 
-        # Set index explicitly and display the line chart
-        sensitivity_df = sensitivity_df.set_index("Volatility")
-        st.line_chart(sensitivity_df)
+    # Column headers (removed hyphens/symbols for cleaner Streamlit charting)
+    sensitivity_df = pd.DataFrame({
+        "Volatility": volatility_space,
+        "Garman Kohlhagen Model": curve_prices_gk,
+        "Binomial Tree Model": curve_prices_tree
+    })
+
+    # Set index explicitly and display the line chart
+    sensitivity_df = sensitivity_df.set_index("Volatility")
+    st.line_chart(sensitivity_df)
