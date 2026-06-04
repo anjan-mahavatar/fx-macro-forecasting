@@ -9,7 +9,7 @@ from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 import matplotlib.pyplot as plt
 import tensorflow as tf
-from tensorflow.keras import Sequential, layers
+
 
 # ==============================================================================
 # 1. GLOBAL PAGE CONFIGURATION
@@ -195,7 +195,7 @@ def stream_fx_binomial_tree(S, K, T, r_d, r_f, sigma, option_type="Call Option",
 # ==============================================================================
 # 4. MAIN INTERFACE FRAMEWORK
 # ==============================================================================
-tabs = st.tabs(["📊 Diagnostic Workspace", "🧠 Deep Learning Forecasting & Inference", "🧮 Quantitative Options Engine"])
+tabs = st.tabs(["📊 Diagnostic Workspace", "🧠 Deep Learning Forecasting", "🧮 Quantitative Options Engine"])
 
 # Mount fallback frame if session is uninitialized
 if st.session_state['processed_df'] is None:
@@ -218,7 +218,7 @@ df = st.session_state['processed_df']
 with tabs[0]:
     st.header("Workspace Data Diagnostics")
     st.markdown("""
-    **How we arrived here:** We synchronized clean ingestion tracks. This panel verifies historical boundaries,
+    **How we arrived here:** synchronized clean ingestion tracks. This panel verifies historical boundaries,
     visualizes asset trends, and isolates target column matrices before passing data vectors into deep network layers.
     """)
     st.subheader(f"📊 Dataset Active Frame: {st.session_state['model_target']}")
@@ -237,7 +237,7 @@ with tabs[0]:
 with tabs[1]:
     st.header("Algorithmic Optimization & Macro-Shock Laboratory")
     st.markdown("""
-    **How we arrived here:** We engineered a cross-model pipeline combining point-in-time tree models with sequence networks.
+    **How we arrived here:** engineered a cross-model pipeline combining point-in-time tree models with sequence networks.
     Adjust the macro sliders in the sidebar to inject shocks, then run the optimization engine to compare predictions.
     """)
 
